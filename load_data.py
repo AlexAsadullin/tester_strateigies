@@ -4,6 +4,7 @@ from matplotlib import category
 import pandas as pd
 import os
 import time
+from datetime import datetime as dt
 from collections import defaultdict
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -122,17 +123,34 @@ def get_bybit_historical_data(limit: int, symbol: str, category: str,):
     return data
 
 # a = ask (спрос), b = bid (предложение)
+def historical_data_analyze(data: list, ):
+    i = 0
+    res = {}
+    for glass in data:
+        ask_offers = glass['result']['a']
+        bid_offers = glass['result']['b']
+        ask_offers_number = len(ask_offers)
+        bid_offers_number = len(bid_offers)
+        res['ID'] = i
+        res['Ask'] = ask_offers
+        res['Bid'] = bid_offers
+        res['LenAsk'] = ask_offers_number
+        res['LenBid'] = bid_offers_number
+        
+        i += 1
+    return res
+
 if __name__ == '__main__':
     load_dotenv()
     history = []
-    # seconds_range = 60 * 60 * 3 # 3 hours
-    seconds_range = 60 # 1 min
-    for i in range(seconds_range):
+    time_range = 60 * 24 # n hours
+    time_range = 60 # 1 min
+    for i in range(time_range):
         history.append(get_bybit_data(symbol='BTCUSDT',
                                       limit=10,
                                       category='linear'))
-        print(f'iteration {i}')
-        time.sleep(1)
+        print(dt.now())
+        time.sleep(60)
 
     with open('BTCUSDT.json', 'w') as f:
         f.write(json.dumps(history))
