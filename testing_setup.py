@@ -10,7 +10,8 @@ import talib
 class Deal:
     def __init__(self, entry_price: float | int, entry_time):
         # entry
-        #self.entry_trigger = 
+        # self.entry_trigger = 
+        self.length = 0
         self.entry_time = entry_time
         self.entry_price = entry_price
         # exit
@@ -18,22 +19,35 @@ class Deal:
         self.exit_price = 0
         # money
         self.profit = 0
+    def forced_close(self):
+        self.exit_price = -1
+        self.exit_time = -1
+        self.exit_trigger = -1
+        self.length = -1
+        # short no comission
+        self.profit = -1
 
 class ShortDeal(Deal):
-    def close_deal(self, exit_price: float | int, exit_time):
+    def close_deal(self, exit_trigger: str, exit_price: float | int, exit_time):
         #self.exit_trigger = 
         self.exit_price = exit_price
         self.exit_time = exit_time
+        self.exit_trigger = exit_trigger
+        self.length = self.exit_time - self.entry_time
+        # short no comission
         self.profit = self.entry_price - self.exit_price
         return self.profit
     def count_profit(self, current_price):
         return self.entry_price - current_price
 
 class LongDeal(Deal):
-    def close_deal(self, exit_price: float | int, exit_time):
+    def close_deal(self, exit_trigger: str, exit_price: float | int, exit_time):
         #self.exit_trigger = 
         self.exit_price = exit_price
         self.exit_time = exit_time
+        self.exit_trigger = exit_trigger
+        self.length = self.exit_time - self.entry_time
+        # long no comission
         self.profit = self.exit_price - self.entry_price
         return self.profit
     def count_profit(self, current_price):
@@ -60,6 +74,12 @@ class Tester:
         # money
         self.money = start_deposit
         self.deals_history = {'Long': [], 'Short': []}
+        '''self.strategy_results = {'keys': []
+                                 'LenSoft': [],
+                                 'LenHard': [],
+                                 'StopLoss': [],
+                                 'TakeProfit': [],
+                                 }'''
         # exits
         self.long_stop_loss_coef = long_stop_loss_coef # less 1
         self.long_take_profit_coef = long_take_profit_coef # more 1
@@ -76,12 +96,14 @@ class Tester:
             self.current_deal = self._open_short_deal(row=row, index=i)
             print('open short index:', i, end=' ')
 
-    def _close_any_deal(self, deal, price, i):
+    def _close_any_deal(self, exit_trigger: str, deal, price, i):
         self.deal_len_counter = 0
         self.now_deal_opened = False
-        self.money += deal.close_deal(exit_price=price, exit_time=i)
+        local_profit = deal.close_deal(exit_price=price, exit_trigger=exit_trigger, exit_time=i) 
+        self.money += local_profit
         self.current_deal = 0
-    
+        return deal
+
     def _check_if_deal_should_be_closed(self, row: pd.Series, index):
         deal = self.current_deal
         deal_name = str(type(deal)).lower()
@@ -94,38 +116,36 @@ class Tester:
             takeprofit_condition = row['Close'] <= deal.entry_price * self.short_take_profit_coef
             stoploss_condition = row['Close'] >= deal.entry_price * self.long_stop_loss_coef
         if takeprofit_condition:
+            deal = self._close_any_deal(deal=deal, exit_trigger='TakeProfit', price=row['Close'], i=index)
             if 'short' in deal_name:
                 self.deals_history['Short'].append(deal)
             else:
                 self.deals_history['Long'].append(deal)
-            self._close_any_deal(deal=deal, price=row['Close'], i=index)
             
             print('close take profit, profit:', deal.profit, 'len:', self.deal_len_counter)
         elif self.deal_len_counter < self.min_deal_len:
             self.deal_len_counter += 1
         elif stoploss_condition:
+            deal = self._close_any_deal(deal=deal, exit_trigger='StopLoss', price=row['Close'], i=index)
             if 'short' in deal_name:
                 self.deals_history['Short'].append(deal)
             else:
                 self.deals_history['Long'].append(deal)
-            self._close_any_deal(deal=deal, price=row['Close'], i=index)
-            print('close stop loss, profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', row['Unnamed: 0'])
+            print('close stop loss, profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', index)
         elif length_condition_soft and deal.count_profit(current_price=row['Close']) > 0:
-            self.deal_len_counter = 0
-            self.now_deal_opened = False
-            self.money += deal.close_deal(exit_price=row['Close'], exit_time=index)
+            deal = self._close_any_deal(deal=deal, exit_trigger='TimeSoft', price=row['Close'], i=index)
             if 'short' in deal_name:
                 self.deals_history['Short'].append(deal)
             else:
                 self.deals_history['Long'].append(deal)
-            print('close by length, wait till profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', row['Unnamed: 0'])
+            print('close by length, wait till profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', index)
         elif length_condition_hard:
-            self._close_any_deal(deal=deal, price=row['Close'], i=index)
+            deal = self._close_any_deal(deal=deal, exit_trigger='TimeHard', price=row['Close'], i=index)
             if 'short' in deal_name:
                 self.deals_history['Short'].append(deal)
             else:
                 self.deals_history['Long'].append(deal)
-            print('close by length, hard cond. profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', row['Unnamed: 0'])
+            print('close by length, hard cond. profit:', deal.profit, 'len:', self.deal_len_counter, 'index:', index)
         else:
             self.deal_len_counter += 1
 
@@ -220,8 +240,8 @@ class Tester:
             self.short_condition = row['RSI'] > rsi_short
             
             self._check_all_conditions(row=row, i=i)
-            
         self.now_deal_opened = False
+        self.current_deal.forced_close()
         
         # TODO: покупаем не 1 шт акций а больше - в зависимости от "уверенности"
 
@@ -240,7 +260,7 @@ class Tester:
         return derivative
 
     def pos_neg_analysys(self, currency: str = 'rub'):
-        pos_deals, neg_deals, zeros, profit_pos, profit_neg = 0, 0, 0, 0, 0
+        pos_deals, neg_deals, zeros, profit_pos, profit_neg, exit_take, exit_stop, exit_timesoft, exit_timehard = 0, 0, 0, 0, 0, 0, 0, 0, 0
         total = {'Long': {},
                  'Short': {}}
  
@@ -254,11 +274,25 @@ class Tester:
                     neg_deals += 1
                 else:
                     zeros += 1
+                if deal.exit_trigger == 'TakeProfit':
+                    exit_take += 1
+                elif deal.exit_trigger == 'TimeSoft':
+                    exit_stop += 1
+                elif deal.exit_trigger == 'StopLoss':
+                    exit_timesoft += 1
+                elif deal.exit_trigger == 'TimeHard':
+                    exit_timehard += 1
+
             total[key]['positive'] = pos_deals
             total[key]['negative'] = neg_deals
             total[key]['zeros'] = zeros
             total[key]['abs_profit'] = profit_neg + profit_pos
             total[key]['positive_profit'] = profit_pos
-            total[key]['negative_profit'] = profit_neg 
+            total[key]['negative_profit'] = profit_neg
+            total[key]['exits by takeprofit'] = exit_take
+            total[key]['exits by stop loss'] = exit_stop
+            total[key]['exits by time toft'] = exit_timesoft
+            total[key]['exits by time hard'] = exit_timehard
+
         print(f'absolute profit: {total['Long']['abs_profit'] + total['Short']['abs_profit']}')
         return total
